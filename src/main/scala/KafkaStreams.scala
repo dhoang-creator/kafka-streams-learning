@@ -3,7 +3,10 @@ import io.circe.generic.auto._
 import io.circe.parser._
 import io.circe.syntax._
 import org.apache.kafka.common.serialization.Serde
+import org.apache.kafka.streams.kstream.{GlobalKTable, KStream, KTable}
+import org.apache.kafka.streams.scala.StreamsBuilder
 import org.apache.kafka.streams.scala.serialization.Serdes
+import org.apache.kafka.streams.scala.ImplicitConversions._
 
 object KafkaStreams {
 
@@ -11,10 +14,10 @@ object KafkaStreams {
   object Domain {
     // this is the Domain outline for an online store
     // The IDE were telling you to ensure that the below we privately accessed
-    private type UserId = String
-    private type Profile = String
-    private type Product = String
-    private type OrderId = String
+    type UserId = String
+    type Profile = String
+    type Product = String
+    type OrderId = String
 
     case class Order(orderId: OrderId, userId: UserId, products: List[Product], amount: Double)
     case class Discount(profile: Profile, amount: Double)
@@ -38,15 +41,32 @@ object KafkaStreams {
   import Domain._
   // Note that below we are using the inbuilt 'Serde' in Kafka wherein we have to explicitly state both a Serializer and Deserializer
   // Remember that with a deserializer, you have to alter an object into bytes -> the function was altered from an implicit val towards an implicit def also and this needs to be understood
-  implicit def serdeOrder[A : Decoder : Encoder ]: Serde[Order] = {
-    val serializer = (order: Order) => order.asJson.noSpaces.getBytes()
+  import Topics._
+  import Domain._
+
+  implicit def serdeOrder[A >: Null : Decoder : Encoder ]: Serde[A] = {
+    val serializer = (a: A) => a.asJson.noSpaces.getBytes()
     val deserializer = (bytes: Array[Byte]) => {
       val string = new String(bytes)
-      decode[Order](string).toOption
+      decode[A](string).toOption
     }
 
-    Serdes.fromFn[Order](serializer, deserializer)
+    Serdes.fromFn[A](serializer, deserializer)
   }
+
+  // topology
+  private val builder = new StreamsBuilder()
+
+  // KStream
+  val usersOrdersStream: KStream[UserId, Order] = builder.stream[UserId, Order](OrdersByUser)
+
+  // KTable - is distributed
+  val usersProfilesTable: KTable[UserId, Profile] = builder.table[UserId, Profile](DiscountProfileByUser)
+
+  // GlobalKTable - copied to all the nodes
+  val discountProfilesGTable: GlobalKTable[Profile, Discount] = builder.globalTable[Profile, Discount](Discounts)
+
+  builder.build()
 
 
   def main(args: Array[String]): Unit = {
